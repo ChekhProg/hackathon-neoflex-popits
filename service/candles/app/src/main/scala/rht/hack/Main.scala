@@ -28,12 +28,31 @@ object Main extends HackathonApp {
   override def start(args: List[String]): SourceActor = {
     // TODO: Implement this method to start your app
 
-    def write(det: CandleDetails) = {
+    def percentCalculate(r: RedisClient , figi: String, close: BigDecimal): BigDecimal = {
+      r.get(figi) match {
+        case Some(x) =>
+          val closeOld: BigDecimal = readClose(x)
+          val percent = (close - closeOld) / closeOld
+          percent
+        case None => BigDecimal(0)
+      }
+    }
+
+    def readClose(s: String): BigDecimal = {
+      val json = parse(s)
+      val close = {
+        json \ "close"
+      }
+      BigDecimal(close.values.toString)
+    }
+
+    def write(det: CandleDetails, per: BigDecimal) = {
       val obj = JObject(List(
         "low" -> JDecimal(det.low),
         "high" -> JDecimal(det.high),
         "open" -> JDecimal(det.open),
         "close" -> JDecimal(det.close),
+        "percent" -> JDecimal(per)
       ))
       val doc = render(obj)
       val json = pretty(doc)
@@ -41,22 +60,25 @@ object Main extends HackathonApp {
     }
 
     val r = new RedisClient("localhost", 6379)
+    val p = new RedisClient("redis-18061.c275.us-east-1-4.ec2.cloud.redislabs.com", 18061, secret=Some("ZUBAw2FrqMaEEnixY8crKIPzoNWp4CfI"))
 
     class MyActor(r: RedisClient) extends Actor {
       val log: LoggingAdapter = Logging(context.system, this)
 
       def receive: Receive = {
         case x @ Candle(interval: FiniteDuration, figi: common.Figi, details: CandleDetails) =>
-          val json = write(x.details)
+          val percent = percentCalculate(r, figi.value, details.close)
+          log.info(figi.value + " " + details.close + " " + percent)
+          val json = write(x.details, percent)
           r.set(figi.value, json)
-          log.info("candle: " + figi.value + "\n" + json)
+          //log.info("candle: " + figi.value + "\n" + json)
         case x      => log.info("received unknown message: " + x.getClass)
       }
     }
 
     val system: ActorSystem = ActorSystem("ActorGuide")
 
-    val pinger = system.actorOf(Props(classOf[MyActor], r), "pinger")
+    val pinger = system.actorOf(Props(classOf[MyActor], p), "pinger")
 
     pinger
   }
